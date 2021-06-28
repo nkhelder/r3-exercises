@@ -1,0 +1,143 @@
+---
+title: "manipulate"
+author: "Noelle Helder"
+date: "6/21/2021"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    code_folding: "show"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Read online table
+
+### Download table ('*.csv')
+
+```{r}
+library(tidyverse)
+
+# set variables
+csv_url  <- "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_AC.csv"
+dir_data <- "data"
+
+# derived variables
+csv <- file.path(dir_data, basename(csv_url))
+
+# create directory
+dir.create(dir_data)
+
+# download file
+download.file(csv_url, csv)
+```
+### Read table `read.csv()`
+```{r}
+# attempt to read csv
+d <- read.csv(csv)
+
+# show the data frame
+d
+
+?read.csv
+# read csv by skipping first two lines, so no header
+d <- read.csv(csv, skip = 2, header = FALSE)
+d
+
+# update data frame to original column names
+names(d) <- names(read.csv(csv))
+d
+```
+
+### Show table `DT::datatable()`
+```{r}
+# show table
+DT::datatable(d)
+
+```
+## Wrangle data
+
+### Manipulate with `dplyr`
+
+```{r}
+d <- d %>% 
+  # tibble
+  tibble() %>% 
+  # mutate time
+  mutate(
+    time = as.Date(substr(time, 1, 10))) %>% 
+  # select columns
+  select(
+    time, 
+    starts_with("total_fisheries_revenue")) %>% 
+  # filter rows
+  filter(
+    time >= as.Date("1981-01-01"))
+
+DT::datatable(d)
+```
+### Tidy with `tidyr`
+
+```{r}
+# convert from wide to long (1 data entry per row)
+d <- d %>% 
+  pivot_longer(-time)
+
+DT::datatable(d)
+
+```
+### Summarize with `dplyr`
+
+```{r}
+library(stringr)
+
+d <- d %>% 
+  # mutate new column called 'region' by dropping the extra part of the character string in the name      column
+  mutate(
+    region = str_replace(name, "total_fisheries_revenue_", "")) %>% 
+  # drop name col
+  select(time, region, value)
+DT::datatable(d)
+
+d_sum <- d %>% 
+  group_by(region) %>% 
+  summarize(
+    avg_revenue = mean(value))
+DT::datatable(d_sum) %>% 
+  DT::formatCurrency("avg_revenue")
+
+```
+
+### Apply functions with `purrr` on a `nest`'ed `tibble`
+
+#### What’s the trend over time for fishing revenue by region?
+
+```{r}
+library(purrr)
+
+n <- d %>% 
+  group_by(region) %>% 
+  # store all of the values for each region in a list within a tibble (!) using nest()
+  nest(
+    data = c(time, value))
+n
+
+n <- n %>% 
+  # use map within purrr package to run a function across lists (in this case, the cells in our           tibble!)
+  mutate(
+    lm    = map(data, function(d){
+      # model value as a function of time
+      lm(value ~ time, d) } ),
+    # extract the coefficients. but we want a value rather than a list, so use map_dbl instead of map.     # store the coefficients in a column called trend as type=dbl
+    trend = map_dbl(lm, function(m){
+      coef(summary(m))["time","Estimate"] }))
+n
+# view the beta coefficients by region. 
+n %>% 
+  select(region, trend) %>% 
+  DT::datatable()
+```
+
